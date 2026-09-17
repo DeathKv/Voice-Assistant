@@ -48,7 +48,7 @@ function App() {
 
   const [status,       setStatus]       = useState('desconectado');
   const [dados,        setDados]        = useState<Dados>({ state: 'desconectado', usuario: '', aria: '' });
-  const [transcricao,  setTranscricao]  = useState(true);
+  const [transcricao,  setTranscricao]  = useState(false);
   const [uptime,       setUptime]       = useState('00:00:00');
   const [hora,         setHora]         = useState('');
   const [nomeExibido,  setNomeExibido]  = useState(NOME_INICIAL);

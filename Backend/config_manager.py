@@ -46,8 +46,9 @@ def obter_config_frontend() -> dict:
         "vad": {
             "label": "Detecção de Silêncio",
             "campos": {
-                "VAD_SILENCE_MS": {"label": "Silêncio para encerrar fala (ms)", "valor": v("VAD_SILENCE_MS","600"), "tipo": "range", "min": 200, "max": 2000},
-                "VAD_PREFIX_MS":  {"label": "Prefixo de áudio capturado (ms)",  "valor": v("VAD_PREFIX_MS","20"),  "tipo": "range", "min": 0,   "max": 500},
+                "MIC_GAIN":       {"label": "Ganho do Microfone (1.0 = normal)", "valor": v("MIC_GAIN","2.0"),       "tipo": "text"},
+                "VAD_SILENCE_MS": {"label": "Silêncio para encerrar fala (ms)",  "valor": v("VAD_SILENCE_MS","600"), "tipo": "range", "min": 200, "max": 2000},
+                "VAD_PREFIX_MS":  {"label": "Prefixo de áudio capturado (ms)",   "valor": v("VAD_PREFIX_MS","20"),   "tipo": "range", "min": 0,   "max": 500},
             }
         },
         "impressora": {

@@ -79,5 +79,11 @@ async def notify_frontend(estado: str, usuario: str = "", aria: str = ""):
 
 async def start_server():
     print("🌐 WebSocket escutando em ws://localhost:8765")
-    async with websockets.serve(handler, "localhost", 8765):
+    async with websockets.serve(
+        handler,
+        "localhost",
+        8765,
+        ping_interval=10,   # mantém conexão viva
+        ping_timeout=5,
+    ):
         await asyncio.Future()
