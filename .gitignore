@@ -1,0 +1,29 @@
+# --- Python ---
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.Python
+**/*.log
+
+# Venv
+Backend/venv/
+.venv/
+
+# Env secrets (NUNCA subir)
+Backend/.env
+Frontend/.env
+
+# --- Node / Vite ---
+Frontend/node_modules/
+Frontend/dist/
+Frontend/.vite/
+
+# --- OS / Editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+
+# --- Build outputs ---
+**/build/
+**/dist/

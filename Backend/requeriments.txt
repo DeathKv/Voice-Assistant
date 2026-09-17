@@ -1,0 +1,6 @@
+google-genai
+pyautogui
+websockets
+python-dotenv
+sounddevice
+numpy
