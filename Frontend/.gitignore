@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Memória pessoal da Aria (dados privados)
+Backend/memoria/fatos.json
+Backend/memoria/historico.json
+Backend/memoria/sessoes.json

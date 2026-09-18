@@ -9,8 +9,16 @@ from dotenv import load_dotenv
 import os
 import soundfile as sf
 import acoes
+import json
 from acoes.registro import obter_ferramentas, executar
 from acoes.contexto import obter_contexto_completo
+from memoria_manager import (
+    montar_contexto_memoria,
+    salvar_fatos,
+    salvar_historico,
+    salvar_sessao,
+    ler_historico,
+)
 
 load_dotenv()
 
@@ -36,9 +44,17 @@ def amplificar(dados_bytes: bytes) -> bytes:
     return audio.astype(np.int16).tobytes()
 
 def montar_system_instruction(modo_comando=False):
-    contexto = obter_contexto_completo()
+    contexto_ambiente = obter_contexto_completo()
+    contexto_memoria  = montar_contexto_memoria()
+
     base = (
-        f"{contexto}\n\n"
+        f"{contexto_ambiente}\n\n"
+    )
+
+    if contexto_memoria:
+        base += f"{contexto_memoria}\n\n"
+
+    base += (
         f"Você é {NOME}, uma assistente pessoal de inteligência artificial "
         "inspirada no J.A.R.V.I.S. do Homem de Ferro. "
         "Sua personalidade é: extremamente educada, formal, calma, sofisticada, "
@@ -49,6 +65,7 @@ def montar_system_instruction(modo_comando=False):
         "mesmo que a pergunta seja em outro idioma. "
         "Nunca quebre o personagem."
     )
+
     if modo_comando:
         base += (
             "\n\nVocê está em MODO COMANDO. O usuário vai pedir para você "
@@ -56,11 +73,13 @@ def montar_system_instruction(modo_comando=False):
             "Use as ferramentas disponíveis. "
             "Após executar, confirme brevemente o que fez de forma elegante."
         )
+
     if historico:
-        base += "\n\nHistórico recente da conversa:\n"
-        for h in historico[-10:]:
+        base += "\n\nHistórico desta sessão:\n"
+        for h in historico[-6:]:
             if h.get("user"): base += f"Usuário disse: {h['user']}\n"
             if h.get("aria"): base += f"{NOME} respondeu: {h['aria']}\n"
+
     return base
 
 
@@ -126,7 +145,6 @@ def montar_config(com_ferramentas=False):
 async def reproduzir_streaming(fila_audio: asyncio.Queue, texto_aria_ref: list):
     """
     Toca cada chunk de áudio conforme chega na fila.
-    Não espera o turno terminar — elimina o delay de resposta.
     """
     loop = asyncio.get_event_loop()
     stream = sd.OutputStream(samplerate=24000, channels=1, dtype="int16")
@@ -135,24 +153,76 @@ async def reproduzir_streaming(fila_audio: asyncio.Queue, texto_aria_ref: list):
 
     try:
         while True:
-            chunk = await fila_audio.get()
+            try:
+                chunk = await fila_audio.get()
+            except asyncio.CancelledError:
+                break
 
             if chunk is None:
-                # Sinal de fim de turno
                 break
 
             if primeiro_chunk:
-                # Notifica frontend assim que o PRIMEIRO chunk chegar
                 await notify_frontend("falando", aria=texto_aria_ref[0])
                 primeiro_chunk = False
 
-            # Toca sem bloquear o event loop
             await loop.run_in_executor(None, stream.write, chunk)
 
+    except asyncio.CancelledError:
+        pass
     finally:
         stream.stop()
         stream.close()
 
+async def extrair_fatos_e_salvar(texto_usuario: str, texto_aria: str):
+    """
+    Chama o Gemini (texto simples) para extrair fatos da conversa.
+    Usa um Client separado para evitar conflito com as tools do Live.
+    """
+    if not texto_usuario and not texto_aria:
+        return
+
+    prompt = f"""Analise esta troca de conversa e extraia APENAS fatos importantes e permanentes sobre o usuário.
+Retorne um JSON puro (sem markdown, sem explicações) no formato:
+{{"chave_do_fato": "valor do fato"}}
+
+Se não houver nenhum fato novo relevante, retorne apenas: {{}}
+
+Exemplos de fatos relevantes:
+- Nome do usuário
+- Onde mora
+- Preferências pessoais
+- Informações sobre trabalho
+- Dispositivos que possui
+- Família
+
+NÃO extraia:
+- Comandos executados (abrir notepad, etc.)
+- Perguntas simples
+- Fatos temporários
+
+Conversa:
+Usuário: {texto_usuario}
+Assistente: {texto_aria}
+
+JSON:"""
+
+    try:
+        # Client separado, sem tools
+        client_texto = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+        resposta = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: client_texto.models.generate_content(
+                model="gemini-3.6-flash",
+                contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            )
+        )
+        texto = resposta.text.strip()
+        texto = texto.replace("```json", "").replace("```", "").strip()
+        fatos = json.loads(texto)
+        if fatos:
+            salvar_fatos(fatos)
+    except Exception as e:
+        print(f"⚠️ Extração de fatos falhou (silencioso): {e}")
 
 # ── Turno NORMAL ─────────────────────────────────────────────────
 async def um_turno():
@@ -174,15 +244,20 @@ async def um_turno():
 
             with sd.InputStream(samplerate=16000, channels=1,
                                 dtype="int16", blocksize=1024, callback=callback):
-                while not resposta_completa.is_set():
-                    try:
-                        dados = await asyncio.wait_for(fila_mic.get(), timeout=0.1)
-                        dados = amplificar(dados)
-                        await session.send_realtime_input(
-                            audio=types.Blob(data=dados, mime_type="audio/pcm;rate=16000")
-                        )
-                    except asyncio.TimeoutError:
-                        continue
+                try:
+                    while not resposta_completa.is_set():
+                        try:
+                            dados = await asyncio.wait_for(fila_mic.get(), timeout=0.1)
+                            dados = amplificar(dados)
+                            await session.send_realtime_input(
+                                audio=types.Blob(data=dados, mime_type="audio/pcm;rate=16000")
+                            )
+                        except asyncio.TimeoutError:
+                            continue
+                        except asyncio.CancelledError:
+                            return
+                except asyncio.CancelledError:
+                    return
 
         async def receber():
             nonlocal texto_usuario, texto_aria
@@ -241,13 +316,19 @@ async def um_turno():
         task_play.cancel()
         await asyncio.gather(task_mic, task_play, return_exceptions=True)
 
-    if ativou_comando.is_set():
-        return "comando"
+        if ativou_comando.is_set():
+            return "comando"
 
     if texto_usuario or texto_aria:
-        historico.append({"user": texto_usuario.strip(), "aria": texto_aria.strip()})
+        entrada = {"user": texto_usuario.strip(), "aria": texto_aria.strip()}
+        historico.append(entrada)
+        salvar_historico(historico)   # ← salva histórico bruto
         if texto_aria:
             print(f"🤖 {NOME}: {texto_aria.strip()}")
+        # Extrai fatos em background (não bloqueia)
+        asyncio.create_task(
+            extrair_fatos_e_salvar(texto_usuario.strip(), texto_aria.strip())
+        )
 
     await notify_frontend("ocioso")
     return "normal"
@@ -273,16 +354,21 @@ async def um_turno_comando():
 
             with sd.InputStream(samplerate=16000, channels=1,
                                 dtype="int16", blocksize=1024, callback=callback):
-                while not resposta_completa.is_set() and not parar_mic.is_set():
-                    try:
-                        dados = await asyncio.wait_for(fila_mic.get(), timeout=0.1)
-                        dados = amplificar(dados)
-                        if not parar_mic.is_set():
-                            await session.send_realtime_input(
-                                audio=types.Blob(data=dados, mime_type="audio/pcm;rate=16000")
-                            )
-                    except asyncio.TimeoutError:
-                        continue
+                try:
+                    while not resposta_completa.is_set() and not parar_mic.is_set():
+                        try:
+                            dados = await asyncio.wait_for(fila_mic.get(), timeout=0.1)
+                            dados = amplificar(dados)
+                            if not parar_mic.is_set():
+                                await session.send_realtime_input(
+                                    audio=types.Blob(data=dados, mime_type="audio/pcm;rate=16000")
+                                )
+                        except asyncio.TimeoutError:
+                            continue
+                        except asyncio.CancelledError:
+                            return
+                except asyncio.CancelledError:
+                    return
 
         async def receber():
             nonlocal texto_usuario, texto_aria
